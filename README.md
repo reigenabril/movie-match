@@ -1,48 +1,60 @@
-# 🎬 Movie Match — AI Movie Recommender for Couples & Friends
+# Movie Match — AI Movie Recommender & Data Pipeline (Apache Airflow)
 
-**Movie Match** es un recomendador de películas por IA que resuelve el clásico dilema: *"¿Qué vemos hoy?"*.
+**Movie Match** es un recomendador de películas por IA y pipeline de ingeniería de datos orquestado con **Apache Airflow**.
 
-En lugar de recomendar por simples coincidencias de género, **Movie Match** analiza el significado profundo de las sinopsis (*overviews*) de las películas favoritas de cada persona usando **embeddings semánticos**, calcula el **vector de gusto combinado** (el punto medio en el espacio vectorial) y encuentra las mejores recomendaciones en el catálogo de [TMDB](https://www.themoviedb.org/).
-
----
-
-## 🌟 Características Principal
-
-- 🔍 **Búsqueda en vivo**: Integración con la API de TMDB v4 para obtener sinopsis, poster y detalles actualizados.
-- 🧠 **Embeddings NLP**: Uso del modelo `sentence-transformers/all-MiniLM-L6-v2` (Hugging Face) para vectorizar las sinopsis.
-- 📐 **Similitud Coseno**: Medición precisa de distancia semántica entre el gusto combinado y las películas candidatas.
-- 📊 **Visualización en 2D (PCA)**: Gráfico interactivo/estático que proyecta en 2 dimensiones el espacio vectorial de los gustos de cada persona, el punto de intersección y las películas recomendadas.
-- 🔐 **Seguridad**: Configuración limpia mediante variables de entorno (`python-dotenv`) para proteger tus tokens de API.
+Resuelve el clásico dilema: *"¿Qué vemos hoy?"* analizando el significado semántico profundo de las sinopsis (*overviews*) de las películas favoritas de cada persona con **NLP & Embeddings**, calcula el **vector de gusto combinado** (el punto medio en el espacio vectorial) y recomienda películas del catálogo de [TMDB](https://www.themoviedb.org/).
 
 ---
 
-## 🏗️ Arquitectura del Pipeline
+## Características Principales
+
+- **Orquestación con Apache Airflow**: DAG modular (`movie_match_pipeline`) que automatiza la ingesta de datos, el cálculo de embeddings y el ranking de recomendaciones.
+- **Búsqueda en vivo**: Integración con la API v4 de TMDB.
+- **Embeddings Semánticos**: Uso de `sentence-transformers/all-MiniLM-L6-v2` (Hugging Face) para vectorizar las sinopsis.
+- **Similitud Coseno**: Medición de distancia semántica entre el gusto conjunto y el catálogo de candidatas.
+- **Visualización 2D (PCA)**: Gráfico del espacio vectorial que muestra las distancias entre las películas de cada persona, la intersección y las recomendaciones.
+- **Seguridad**: Configuración con variables de entorno (`python-dotenv`) para resguardar tokens de API.
+
+---
+
+## Arquitectura de Orquestación en Airflow
 
 ```
-[ Persona 1: Títulos ] ──► [ TMDB API ] ──► [ Overviews ] ──► [ SentenceTransformer ] ──► Vector Gusto 1 ┐
-                                                                                                          ├─► Vector Combinado ─► Cosine Similarity vs Catálogo ─► Top 10 Recomendaciones
-[ Persona 2: Títulos ] ──► [ TMDB API ] ──► [ Overviews ] ──► [ SentenceTransformer ] ──► Vector Gusto 2 ┘
+[ Task 1: fetch_tmdb_catalog ] ──► Descarga catálogo TMDB (Staging JSON)
+              │
+              ▼
+[ Task 2: generate_embeddings ] ──► Vectoriza sinopsis con SentenceTransformer (.npy)
+              │
+              ▼
+[ Task 3: calculate_recommendations ] ──► Vector de gusto combinado + Cosine Similarity
+              │
+              ▼
+[ Task 4: generate_pca_plot ] ──► Reporte gráfico 2D PCA de recomendaciones
 ```
 
 ---
 
-## 📁 Estructura del Proyecto
+## Estructura del Repositorio
 
 ```
 movie/
-├── .env.example          # Plantilla para variables de entorno (Token TMDB)
-├── .gitignore             # Archivos excluidos del control de versiones (.env, cache, etc.)
-├── requirements.txt       # Dependencias de Python necesarias
-├── movie_match.ipynb      # Notebook interactivo de Jupyter
-├── movie_match.py         # Script / CLI ejecutable de Python
-└── README.md              # Documentación del repositorio
+├── dags/
+│   └── movie_match_dag.py # DAG principal de Apache Airflow
+├── data/                  # Almacenamiento local staging (catalogo y embeddings)
+├── output/                # Artefactos generados (CSV de recomendaciones y gráficos)
+├── .env.example           # Plantilla para variables de entorno (Token TMDB)
+├── .gitignore              # Archivos excluidos del repositorio (.env, cache, etc.)
+├── requirements.txt        # Dependencias de Python (requests, airflow, transformers, etc.)
+├── movie_match.ipynb       # Notebook interactivo para pruebas rápidas
+├── movie_match.py          # Script ejecutable por consola (CLI interactivo)
+└── README.md               # Documentación del proyecto
 ```
 
 ---
 
-## 🚀 Instalación y Uso
+## Instalación y Uso
 
-### 1. Clonar el repositorio e instalar dependencias
+### 1. Clonar e instalar dependencias
 
 ```bash
 git clone https://github.com/tu-usuario/movie-match.git
@@ -53,14 +65,11 @@ pip install -r requirements.txt
 
 ### 2. Configurar la API Key de TMDB
 
-1. Obtené tu token Bearer gratis en [TMDB API Settings](https://www.themoviedb.org/settings/api).
-2. Copiá el archivo `.env.example` como `.env`:
+Copiá `.env.example` como `.env` y agregá tu token Bearer v4:
 
 ```bash
 cp .env.example .env
 ```
-
-3. Edita `.env` agregando tu token:
 
 ```env
 TMDB_BEARER_TOKEN=tu_token_bearer_aqui
@@ -68,34 +77,44 @@ TMDB_BEARER_TOKEN=tu_token_bearer_aqui
 
 ---
 
-## 💻 Ejecución
+## Formas de Ejecución
 
-### Opción A: Desde Jupyter Notebook
+### Opción A: Orquestado con Apache Airflow
 
-Abrí el notebook interactivo en VSCode, JupyterLab o Google Colab:
+Podés iniciar Airflow de forma standalone para probar el DAG:
+
+```bash
+export AIRFLOW_HOME=$(pwd)
+airflow standalone
+```
+
+Luego, ingresá a la interfaz web de Airflow en `http://localhost:8080`, activá el DAG `movie_match_pipeline` y ejecutalo manualmente.
+
+### Opción B: CLI Interactivo (Script en consola)
+
+```bash
+python3 movie_match.py
+```
+
+### Opción C: Notebook de Jupyter
 
 ```bash
 jupyter notebook movie_match.ipynb
 ```
 
-### Opción B: Desde la línea de comandos (Python Script)
-
-```bash
-python movie_match.py --save-plot mapa_gustos.png
-```
-
 ---
 
-## 🛠️ Tecnologías Utilizadas
+## Tecnologías Utilizadas
 
-- **Lenguaje**: Python 3.10+
+- **Orquestación & Data Engineering**: Apache Airflow (`DAG`, `@task` TaskFlow API)
+- **Lenguaje**: Python 3.9+
 - **NLP & Embeddings**: `sentence-transformers` (`all-MiniLM-L6-v2`)
-- **Machine Learning & Math**: `scikit-learn` (PCA, Cosine Similarity), `numpy`
-- **Data & Visualization**: `pandas`, `matplotlib`
-- **API Client & Secs**: `requests`, `python-dotenv`
+- **Machine Learning**: `scikit-learn` (PCA, Cosine Similarity), `numpy`
+- **Data & Visualización**: `pandas`, `matplotlib`
+- **API Client**: `requests`, `python-dotenv`
 
 ---
 
-## 📄 Licencia
+## Licencia
 
-Este proyecto está bajo la Licencia MIT. ¡Sentite libre de usarlo, mejorarlo o clonarlo!
+Este proyecto está bajo la Licencia MIT.

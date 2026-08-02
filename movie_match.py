@@ -54,7 +54,7 @@ def search_movie(title: str) -> dict | None:
     data = tmdb_get("/search/movie", {"query": title})
     results = data.get("results", [])
     if not results:
-        print(f"⚠️  No se encontraron resultados para: {title!r}")
+        print(f"[WARNING] No se encontraron resultados para: {title!r}")
         return None
     top = results[0]
     return {
@@ -204,7 +204,7 @@ def plot_taste_map(extra_data: dict, save_path: str = None):
     plt.annotate(top_recommendations[0]["title"], rec_coords[0], fontsize=9, weight="bold", color="#1B5E20")
 
     plt.legend()
-    plt.title("Movie Match — Mapa de Gustos y Recomendaciones en Espacio de Embeddings (PCA 2D)")
+    plt.title("Movie Match - Mapa de Gustos y Recomendaciones en Espacio de Embeddings (PCA 2D)")
     plt.xlabel("PC1")
     plt.ylabel("PC2")
     plt.grid(True, linestyle="--", alpha=0.3)
@@ -212,40 +212,39 @@ def plot_taste_map(extra_data: dict, save_path: str = None):
 
     if save_path:
         plt.savefig(save_path, dpi=300)
-        print(f"📷 Gráfico guardado en: {save_path}")
+        print(f"Grafico guardado en: {save_path}")
     else:
         plt.show()
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Movie Match — Recomendador por embeddings")
+    parser = argparse.ArgumentParser(description="Movie Match - Recomendador por embeddings")
     parser.add_argument("--save-plot", type=str, help="Ruta para guardar el gráfico PCA generado")
     parser.add_argument("--demo", action="store_true", help="Ejecutar con datos de prueba predeterminados")
     args = parser.parse_args()
 
-    print("🎬 Movie Match — Recomendador por Embeddings Semánticos\n")
+    print("Movie Match - Recomendador por Embeddings Semánticos\n")
 
     if args.demo:
         p1 = ["Interstellar", "Eternal Sunshine of the Spotless Mind", "Whiplash"]
         p2 = ["Coco", "La La Land", "Amelie"]
     else:
-        print("💡 Ingresá títulos de películas separadas por comas (ejemplo: Matrix, Inception, Avatar)\n")
-        raw_p1 = input("👤 Persona 1 — ¿Qué películas te gustan?: ")
-        raw_p2 = input("👤 Persona 2 — ¿Qué películas te gustan?: ")
+        print("Ingresá títulos de películas separadas por comas (ejemplo: Matrix, Inception, Avatar)\n")
+        raw_p1 = input("Persona 1 - ¿Qué películas te gustan?: ")
+        raw_p2 = input("Persona 2 - ¿Qué películas te gustan?: ")
 
         p1 = [t.strip() for t in raw_p1.split(",") if t.strip()]
         p2 = [t.strip() for t in raw_p2.split(",") if t.strip()]
 
         if not p1 or not p2:
-            print("\n⚠️ Usando datos de prueba por defecto ya que no ingresaste suficientes películas...\n")
+            print("\nUsando datos de prueba por defecto ya que no ingresaste suficientes películas...\n")
             p1 = ["Interstellar", "Eternal Sunshine of the Spotless Mind", "Whiplash"]
             p2 = ["Coco", "La La Land", "Amelie"]
 
-    print("\n🔍 Procesando gustos y consultando TMDB...")
+    print("\nProcesando gustos y consultando TMDB...")
     df_recs, extra = recommend([p1, p2])
     
-    print("\n🏆 Top Recomendaciones:")
+    print("\nTop Recomendaciones:")
     print(df_recs.to_string(index=False))
 
     save_plot_path = args.save_plot or "mapa_gustos.png"
     plot_taste_map(extra, save_path=save_plot_path)
-
