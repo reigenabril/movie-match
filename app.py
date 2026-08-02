@@ -133,8 +133,7 @@ if st.button("Buscar Recomendaciones"):
                 st.write("---")
                 st.subheader("Mapa de Gustos en Espacio Vectorial (PCA 2D)")
 
-                fig, ax = plt.subplots(figsize=(10, 6))
-                plot_taste_map(extra)
+                fig = plot_taste_map(extra)
                 st.pyplot(fig)
 
             except Exception as e:

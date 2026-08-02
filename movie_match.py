@@ -150,7 +150,7 @@ def recommend(
 
     return df_results, extra_data
 
-def plot_taste_map(extra_data: dict, save_path: str = None):
+def plot_taste_map(extra_data: dict, save_path: str = None, ax: plt.Axes = None):
     """Genera el gráfico 2D PCA con el mapa de gustos y las recomendaciones."""
     taste_vectors = extra_data["taste_vectors"]
     combined_vector = extra_data["combined_vector"]
@@ -176,7 +176,10 @@ def plot_taste_map(extra_data: dict, save_path: str = None):
     pca = PCA(n_components=2)
     coords = pca.fit_transform(all_vecs)
 
-    plt.figure(figsize=(10, 7))
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(10, 7))
+    else:
+        fig = ax.get_figure()
 
     curr_idx = 0
     colors = ["#4C72B0", "#DD8452", "#9370DB", "#E6550D"]
@@ -185,36 +188,35 @@ def plot_taste_map(extra_data: dict, save_path: str = None):
         color = colors[p_idx % len(colors)]
         n_m = len(found)
         p_coords = coords[curr_idx : curr_idx + n_m]
-        plt.scatter(p_coords[:, 0], p_coords[:, 1], color=color, s=100, label=f"Persona {p_idx+1}")
+        ax.scatter(p_coords[:, 0], p_coords[:, 1], color=color, s=100, label=f"Persona {p_idx+1}")
         for i, m in enumerate(found):
-            plt.annotate(m["title"], p_coords[i], fontsize=8, alpha=0.9)
+            ax.annotate(m["title"], p_coords[i], fontsize=8, alpha=0.9)
         curr_idx += n_m
 
     # Combined vector
     comb_coord = coords[curr_idx : curr_idx + 1]
-    plt.scatter(comb_coord[:, 0], comb_coord[:, 1], color="black", marker="X", s=220, label="Gusto combinado")
+    ax.scatter(comb_coord[:, 0], comb_coord[:, 1], color="black", marker="X", s=220, label="Gusto combinado")
     curr_idx += 1
 
     # Recommendations
     n_recs = len(top_recommendations)
     rec_coords = coords[curr_idx : curr_idx + n_recs]
-    plt.scatter(rec_coords[:, 0], rec_coords[:, 1], color="#55A868", s=60, alpha=0.7, label="Recomendaciones")
+    ax.scatter(rec_coords[:, 0], rec_coords[:, 1], color="#55A868", s=60, alpha=0.7, label="Recomendaciones")
 
     # Resaltar la #1
-    plt.annotate(top_recommendations[0]["title"], rec_coords[0], fontsize=9, weight="bold", color="#1B5E20")
+    ax.annotate(top_recommendations[0]["title"], rec_coords[0], fontsize=9, weight="bold", color="#1B5E20")
 
-    plt.legend()
-    plt.title("Movie Match - Mapa de Gustos y Recomendaciones en Espacio de Embeddings (PCA 2D)")
-    plt.xlabel("PC1")
-    plt.ylabel("PC2")
-    plt.grid(True, linestyle="--", alpha=0.3)
-    plt.tight_layout()
+    ax.legend()
+    ax.set_title("Movie Match - Mapa de Gustos y Recomendaciones en Espacio de Embeddings (PCA 2D)")
+    ax.set_xlabel("PC1")
+    ax.set_ylabel("PC2")
+    ax.grid(True, linestyle="--", alpha=0.3)
 
     if save_path:
-        plt.savefig(save_path, dpi=300)
+        fig.savefig(save_path, dpi=300)
         print(f"Grafico guardado en: {save_path}")
-    else:
-        plt.show()
+
+    return fig
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Movie Match - Recomendador por embeddings")
