@@ -7,6 +7,14 @@ __pycache__/
 *$py.class
 .ipynb_checkpoints/
 
+# Airflow local runtime
+airflow.cfg
+airflow.db*
+logs/
+data/
+output/
+*.generated
+
 # OS / IDE
 .DS_Store
 .vscode/
