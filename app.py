@@ -110,7 +110,7 @@ if st.button("Buscar Recomendaciones"):
                             if m.get("poster_path")
                             else "https://via.placeholder.com/500x750?text=No+Poster"
                         )
-                        st.image(poster_url, use_column_width=True)
+                        st.image(poster_url, use_container_width=True)
                         st.markdown(f"**{m['title']}**")
                         match_pct = int(m['score'] * 100)
                         st.markdown(f"<span class='score-badge'>Match: {match_pct}%</span>", unsafe_allow_html=True)
