@@ -56,6 +56,19 @@ with DAG(
         tmdb_base = "https://api.themoviedb.org/3"
         candidates = {}
 
+        from concurrent.futures import ThreadPoolExecutor
+
+        def get_providers(movie_id: int) -> list:
+            try:
+                r = requests.get(f"{tmdb_base}/movie/{movie_id}/watch/providers", headers=headers)
+                if r.status_code == 200:
+                    res = r.json().get("results", {}).get("AR", {})
+                    flatrate = res.get("flatrate", [])
+                    return [p["provider_name"] for p in flatrate if "provider_name" in p]
+            except Exception:
+                pass
+            return []
+
         for endpoint in ["/movie/popular", "/movie/top_rated"]:
             for page in range(1, n_pages + 1):
                 url = f"{tmdb_base}{endpoint}?language=es-AR&page={page}"
@@ -69,14 +82,22 @@ with DAG(
                             "overview": m["overview"],
                             "vote_average": m.get("vote_average"),
                             "poster_path": m.get("poster_path"),
+                            "providers": [],
                         }
 
         catalog_list = list(candidates.values())
+
+        def _fetch_prov(m):
+            m["providers"] = get_providers(m["id"])
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            list(executor.map(_fetch_prov, catalog_list))
+
         catalog_path = os.path.join(DATA_DIR, "catalog.json")
         with open(catalog_path, "w", encoding="utf-8") as f:
             json.dump(catalog_list, f, ensure_ascii=False, indent=2)
 
-        print(f"Descargadas {len(catalog_list)} películas del catálogo a: {catalog_path}")
+        print(f"Descargadas {len(catalog_list)} películas del catálogo con plataformas a: {catalog_path}")
         return catalog_path
 
     @task(task_id="generate_embeddings")
@@ -169,7 +190,16 @@ with DAG(
         ranking = sorted(filtered_catalog, key=lambda x: x["score"], reverse=True)
         top_10 = ranking[:10]
 
-        results_df = pd.DataFrame(top_10)[["title", "score", "vote_average", "overview"]]
+        results_df = pd.DataFrame(top_10)
+        if "providers" in results_df.columns:
+            results_df["providers_str"] = results_df["providers"].apply(
+                lambda p: ", ".join(p) if isinstance(p, list) and p else "No disponible en streaming"
+            )
+        else:
+            results_df["providers_str"] = "No disponible en streaming"
+
+        results_df = results_df[["title", "score", "vote_average", "providers_str", "overview"]]
+        results_df.rename(columns={"providers_str": "providers"}, inplace=True)
         results_df["score"] = results_df["score"].round(3)
 
         results_csv_path = os.path.join(OUTPUT_DIR, "recommendations.csv")

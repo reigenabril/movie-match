@@ -11,6 +11,8 @@ from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.decomposition import PCA
 from sentence_transformers import SentenceTransformer
 
+from concurrent.futures import ThreadPoolExecutor
+
 # Cargar variables de entorno desde .env
 load_dotenv()
 
@@ -24,6 +26,20 @@ if TMDB_BEARER_TOKEN:
     }
 else:
     HEADERS = {}
+
+POPULAR_PROVIDERS = [
+    "Todas las plataformas",
+    "Netflix",
+    "Amazon Prime Video",
+    "Disney Plus",
+    "Max (HBO Max)",
+    "Paramount Plus",
+    "Apple TV+",
+    "MUBI",
+    "MovistarTV",
+    "Claro video",
+    "Mercado Play",
+]
 
 # Modelo de embeddings de sinopsis
 _model = None
@@ -49,29 +65,77 @@ def tmdb_get(endpoint: str, params: dict = None) -> dict:
     response.raise_for_status()
     return response.json()
 
-def search_movie(title: str) -> dict | None:
-    """Busca una película por título y devuelve datos básicos + overview."""
+def get_movie_watch_providers(movie_id: int, region: str = "AR") -> list[str]:
+    """Obtiene la lista de plataformas de streaming por suscripción (flatrate) para una película."""
+    try:
+        data = tmdb_get(f"/movie/{movie_id}/watch/providers")
+        results = data.get("results", {}).get(region, {})
+        flatrate = results.get("flatrate", [])
+        return [p["provider_name"] for p in flatrate if "provider_name" in p]
+    except Exception:
+        return []
+
+def matches_provider(selected_provider: str, movie_providers: list[str]) -> bool:
+    """Verifica si los proveedores de la película coinciden con el filtro seleccionado."""
+    if not selected_provider or selected_provider == "Todas las plataformas":
+        return True
+    
+    sel = selected_provider.lower()
+    if "netflix" in sel:
+        keywords = ["netflix"]
+    elif "prime" in sel or "amazon" in sel:
+        keywords = ["prime", "amazon"]
+    elif "disney" in sel:
+        keywords = ["disney"]
+    elif "hbo" in sel or "max" in sel:
+        keywords = ["hbo", "max"]
+    elif "paramount" in sel:
+        keywords = ["paramount"]
+    elif "apple" in sel:
+        keywords = ["apple"]
+    elif "mubi" in sel:
+        keywords = ["mubi"]
+    elif "movistar" in sel:
+        keywords = ["movistar"]
+    elif "claro" in sel:
+        keywords = ["claro"]
+    elif "mercado" in sel:
+        keywords = ["mercado"]
+    else:
+        keywords = [sel]
+
+    for p in movie_providers:
+        p_lower = p.lower()
+        if any(kw in p_lower for kw in keywords):
+            return True
+    return False
+
+def search_movie(title: str, region: str = "AR") -> dict | None:
+    """Busca una película por título y devuelve datos básicos + overview + plataformas."""
     data = tmdb_get("/search/movie", {"query": title})
     results = data.get("results", [])
     if not results:
         print(f"[WARNING] No se encontraron resultados para: {title!r}")
         return None
     top = results[0]
+    movie_id = top["id"]
+    providers = get_movie_watch_providers(movie_id, region=region)
     return {
-        "id": top["id"],
+        "id": movie_id,
         "title": top["title"],
         "overview": top.get("overview", ""),
         "release_date": top.get("release_date", ""),
         "vote_average": top.get("vote_average"),
         "poster_path": top.get("poster_path"),
+        "providers": providers,
     }
 
-def build_taste_vector(movie_titles: list[str]) -> tuple[np.ndarray, list[dict]]:
+def build_taste_vector(movie_titles: list[str], region: str = "AR") -> tuple[np.ndarray, list[dict]]:
     """Genera el vector de gusto normalizado para una lista de títulos."""
     found = []
     vectors = []
     for title in movie_titles:
-        movie = search_movie(title)
+        movie = search_movie(title, region=region)
         if movie and movie["overview"]:
             found.append(movie)
             vectors.append(embed_text(movie["overview"]))
@@ -83,8 +147,8 @@ def build_taste_vector(movie_titles: list[str]) -> tuple[np.ndarray, list[dict]]
     taste_vector /= np.linalg.norm(taste_vector)
     return taste_vector, found
 
-def get_candidate_pool(n_pages: int = 5) -> list[dict]:
-    """Obtiene un catálogo de películas populares y top rated desde TMDB."""
+def get_candidate_pool(n_pages: int = 5, region: str = "AR", fetch_providers: bool = True) -> list[dict]:
+    """Obtiene un catálogo de películas populares y top rated desde TMDB con información de plataformas."""
     candidates = {}
     for endpoint in ["/movie/popular", "/movie/top_rated"]:
         for page in range(1, n_pages + 1):
@@ -97,23 +161,36 @@ def get_candidate_pool(n_pages: int = 5) -> list[dict]:
                         "overview": m["overview"],
                         "vote_average": m.get("vote_average"),
                         "poster_path": m.get("poster_path"),
+                        "providers": [],
                     }
-    return list(candidates.values())
+    
+    candidate_list = list(candidates.values())
+
+    if fetch_providers:
+        def _fetch_prov(m):
+            m["providers"] = get_movie_watch_providers(m["id"], region=region)
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            list(executor.map(_fetch_prov, candidate_list))
+
+    return candidate_list
 
 def recommend(
     people_movies: list[list[str]],
     n_recommendations: int = 10,
-    n_pages_pool: int = 5
+    n_pages_pool: int = 5,
+    selected_provider: Optional[str] = None,
+    region: str = "AR",
 ) -> tuple[pd.DataFrame, dict]:
     """
-    Calcula recomendaciones cruzando los gustos de N personas.
+    Calcula recomendaciones cruzando los gustos de N personas con filtro opcional de plataforma de streaming.
     """
     taste_vectors = []
     all_found_movies = []
     seen_ids = set()
 
     for idx, titles in enumerate(people_movies, 1):
-        v, found = build_taste_vector(titles)
+        v, found = build_taste_vector(titles, region=region)
         taste_vectors.append(v)
         all_found_movies.append(found)
         for m in found:
@@ -125,8 +202,20 @@ def recommend(
     combined_vector /= np.linalg.norm(combined_vector)
 
     # Catálogo candidatas
-    pool = get_candidate_pool(n_pages=n_pages_pool)
+    pool = get_candidate_pool(n_pages=n_pages_pool, region=region)
     pool_filtered = [m for m in pool if m["id"] not in seen_ids]
+
+    # Filtrar por plataforma si fue seleccionada
+    if selected_provider and selected_provider != "Todas las plataformas":
+        pool_filtered = [m for m in pool_filtered if matches_provider(selected_provider, m.get("providers", []))]
+        if not pool_filtered:
+            print(f"[WARNING] No se encontraron películas disponibles en {selected_provider!r}.")
+
+    if not pool_filtered:
+        raise ValueError(
+            f"No hay películas disponibles en el catálogo para el filtro de plataforma: {selected_provider}. "
+            "Probá seleccionando 'Todas las plataformas' o ampliando las páginas de búsqueda."
+        )
 
     # Calcular embeddings y similitud coseno
     pool_embeddings = np.array([embed_text(m["overview"]) for m in pool_filtered])
@@ -138,7 +227,16 @@ def recommend(
     ranking = sorted(pool_filtered, key=lambda x: x["score"], reverse=True)
     top_recommendations = ranking[:n_recommendations]
 
-    df_results = pd.DataFrame(top_recommendations)[["title", "score", "vote_average", "overview"]]
+    df_results = pd.DataFrame(top_recommendations)
+    if "providers" in df_results.columns:
+        df_results["providers_str"] = df_results["providers"].apply(
+            lambda p: ", ".join(p) if isinstance(p, list) and p else "No disponible en streaming"
+        )
+    else:
+        df_results["providers_str"] = "No disponible en streaming"
+
+    df_results = df_results[["title", "score", "vote_average", "providers_str", "overview"]]
+    df_results.rename(columns={"providers_str": "providers"}, inplace=True)
     df_results["score"] = df_results["score"].round(3)
 
     extra_data = {
@@ -146,6 +244,8 @@ def recommend(
         "combined_vector": combined_vector,
         "all_found_movies": all_found_movies,
         "top_recommendations": top_recommendations,
+        "selected_provider": selected_provider,
+        "region": region,
     }
 
     return df_results, extra_data
@@ -204,10 +304,12 @@ def plot_taste_map(extra_data: dict, save_path: str = None, ax: plt.Axes = None)
     ax.scatter(rec_coords[:, 0], rec_coords[:, 1], color="#55A868", s=60, alpha=0.7, label="Recomendaciones")
 
     # Resaltar la #1
-    ax.annotate(top_recommendations[0]["title"], rec_coords[0], fontsize=9, weight="bold", color="#1B5E20")
+    if top_recommendations:
+        ax.annotate(top_recommendations[0]["title"], rec_coords[0], fontsize=9, weight="bold", color="#1B5E20")
 
     ax.legend()
-    ax.set_title("Movie Match - Mapa de Gustos y Recomendaciones en Espacio de Embeddings (PCA 2D)")
+    title_suffix = f" (Plataforma: {extra_data.get('selected_provider')})" if extra_data.get('selected_provider') and extra_data.get('selected_provider') != "Todas las plataformas" else ""
+    ax.set_title(f"Movie Match - Mapa de Gustos y Recomendaciones en Espacio de Embeddings (PCA 2D){title_suffix}")
     ax.set_xlabel("PC1")
     ax.set_ylabel("PC2")
     ax.grid(True, linestyle="--", alpha=0.3)
@@ -222,6 +324,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Movie Match - Recomendador por embeddings")
     parser.add_argument("--save-plot", type=str, help="Ruta para guardar el gráfico PCA generado")
     parser.add_argument("--demo", action="store_true", help="Ejecutar con datos de prueba predeterminados")
+    parser.add_argument("--provider", type=str, default="Todas las plataformas", help="Filtrar por plataforma (ej: Netflix, Disney Plus, Max)")
+    parser.add_argument("--region", type=str, default="AR", help="Código de país para disponibilidad (ej: AR, ES, MX, US)")
     args = parser.parse_args()
 
     print("Movie Match - Recomendador por Embeddings Semánticos\n")
@@ -242,11 +346,12 @@ if __name__ == "__main__":
             p1 = ["Interstellar", "Eternal Sunshine of the Spotless Mind", "Whiplash"]
             p2 = ["Coco", "La La Land", "Amelie"]
 
-    print("\nProcesando gustos y consultando TMDB...")
-    df_recs, extra = recommend([p1, p2])
+    print(f"\nProcesando gustos y consultando TMDB (Filtro Plataforma: {args.provider}, País: {args.region})...")
+    df_recs, extra = recommend([p1, p2], selected_provider=args.provider, region=args.region)
     
     print("\nTop Recomendaciones:")
     print(df_recs.to_string(index=False))
 
     save_plot_path = args.save_plot or "mapa_gustos.png"
     plot_taste_map(extra, save_path=save_plot_path)
+
