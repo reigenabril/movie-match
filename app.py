@@ -6,7 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from dotenv import load_dotenv
 
-from movie_match import recommend, plot_taste_map, search_movie, POPULAR_PROVIDERS
+from movie_match import recommend, plot_taste_map, search_movie, POPULAR_PROVIDERS, get_movie_genres
 
 load_dotenv()
 
@@ -55,6 +55,15 @@ st.markdown(
         margin-top: 5px;
         display: inline-block;
     }
+    .genre-badge {
+        background-color: #ab47bc;
+        color: white;
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-size: 0.8em;
+        margin-top: 3px;
+        display: inline-block;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -95,6 +104,16 @@ selected_region_label = st.sidebar.selectbox(
 )
 selected_region = region_options[selected_region_label]
 
+st.sidebar.markdown("---")
+st.sidebar.subheader("🎭 Género de Película")
+genres_dict = get_movie_genres()
+selected_genre = st.sidebar.selectbox(
+    "Filtrar por Género (opcional)",
+    options=list(genres_dict.keys()),
+    index=0,
+    help="Si seleccionás un género, solo se recomendarán películas pertenecientes a esa categoría."
+)
+
 col1, col2 = st.columns(2)
 
 with col1:
@@ -124,21 +143,28 @@ if st.button("Buscar Recomendaciones"):
     if not p1_list or not p2_list:
         st.warning("Ingresá al menos una película para cada persona.")
     else:
-        with st.spinner(f"Analizando sinopsis y filtrando catálogo (Plataforma: {selected_provider})..."):
+        with st.spinner("Analizando sinopsis y filtrando catálogo..."):
             try:
                 df_recs, extra = recommend(
                     [p1_list, p2_list],
                     selected_provider=selected_provider,
+                    selected_genre=selected_genre,
                     region=selected_region,
                 )
                 top_recs = extra["top_recommendations"]
 
+                filters_info = []
                 if selected_provider != "Todas las plataformas":
-                    st.info(f"🍿 Mostrando recomendaciones disponibles en **{selected_provider}** ({selected_region_label})")
+                    filters_info.append(f"Plataforma: **{selected_provider}** ({selected_region_label})")
+                if selected_genre != "Todos los géneros":
+                    filters_info.append(f"Género: **{selected_genre}**")
+
+                if filters_info:
+                    st.info("🍿 **Filtros activos:** " + " | ".join(filters_info))
 
                 st.subheader("Top Recomendaciones Combinadas")
 
-                # Mostrar las mejores en columnas con poster y plataformas
+                # Mostrar las mejores en columnas con poster, géneros y plataformas
                 n_display = min(4, len(top_recs))
                 if n_display > 0:
                     rec_cols = st.columns(n_display)
@@ -156,6 +182,10 @@ if st.button("Buscar Recomendaciones"):
                             st.markdown(f"<span class='score-badge'>Match: {match_pct}%</span>", unsafe_allow_html=True)
                             st.caption(f"Rating: {m.get('vote_average', 'N/A')} / 10")
                             
+                            g_list = m.get("genres", [])
+                            if g_list:
+                                st.caption(f"🎭 **Géneros:** {', '.join(g_list)}")
+
                             provs = m.get("providers", [])
                             prov_text = ", ".join(provs) if provs else "Sin streaming"
                             st.caption(f"📺 **Plataformas:** {prov_text}")
@@ -168,6 +198,7 @@ if st.button("Buscar Recomendaciones"):
                             "title": "Título",
                             "score": "Score de Coincidencia",
                             "vote_average": "Calificación TMDB",
+                            "genres": "Géneros",
                             "providers": "Plataforma(s)",
                             "overview": "Sinopsis",
                         }

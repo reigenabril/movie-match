@@ -41,6 +41,59 @@ POPULAR_PROVIDERS = [
     "Mercado Play",
 ]
 
+DEFAULT_GENRES = {
+    "Todos los géneros": None,
+    "Acción": 28,
+    "Aventura": 12,
+    "Animación": 16,
+    "Comedia": 35,
+    "Crimen": 80,
+    "Documental": 99,
+    "Drama": 18,
+    "Familia": 10751,
+    "Fantasía": 14,
+    "Historia": 36,
+    "Terror": 27,
+    "Música": 10402,
+    "Misterio": 9648,
+    "Romance": 10749,
+    "Ciencia ficción": 878,
+    "Película de TV": 10770,
+    "Suspense": 53,
+    "Bélica": 10752,
+    "Oeste": 37,
+}
+
+_genres_cache = None
+
+def get_movie_genres() -> dict[str, int | None]:
+    """Obtiene el mapeo de nombres de géneros a IDs desde TMDB (con fallback local)."""
+    global _genres_cache
+    if _genres_cache is not None:
+        return _genres_cache
+
+    try:
+        data = tmdb_get("/genre/movie/list")
+        genres_list = data.get("genres", [])
+        mapping = {"Todos los géneros": None}
+        for g in genres_list:
+            mapping[g["name"].capitalize()] = g["id"]
+        _genres_cache = mapping
+        return _genres_cache
+    except Exception:
+        _genres_cache = DEFAULT_GENRES
+        return _genres_cache
+
+def get_genre_id_to_name_map() -> dict[int, str]:
+    """Retorna un mapeo inverso de ID a Nombre de género."""
+    genres_map = get_movie_genres()
+    id_map = {}
+    for name, g_id in genres_map.items():
+        if g_id is not None:
+            id_map[g_id] = name
+    return id_map
+
+
 # Modelo de embeddings de sinopsis
 _model = None
 
@@ -148,7 +201,7 @@ def build_taste_vector(movie_titles: list[str], region: str = "AR") -> tuple[np.
     return taste_vector, found
 
 def get_candidate_pool(n_pages: int = 5, region: str = "AR", fetch_providers: bool = True) -> list[dict]:
-    """Obtiene un catálogo de películas populares y top rated desde TMDB con información de plataformas."""
+    """Obtiene un catálogo de películas populares y top rated desde TMDB con información de plataformas y géneros."""
     candidates = {}
     for endpoint in ["/movie/popular", "/movie/top_rated"]:
         for page in range(1, n_pages + 1):
@@ -161,10 +214,16 @@ def get_candidate_pool(n_pages: int = 5, region: str = "AR", fetch_providers: bo
                         "overview": m["overview"],
                         "vote_average": m.get("vote_average"),
                         "poster_path": m.get("poster_path"),
+                        "genre_ids": m.get("genre_ids", []),
                         "providers": [],
                     }
     
     candidate_list = list(candidates.values())
+
+    id_to_name = get_genre_id_to_name_map()
+    for m in candidate_list:
+        g_names = [id_to_name[gid] for gid in m.get("genre_ids", []) if gid in id_to_name]
+        m["genres"] = g_names
 
     if fetch_providers:
         def _fetch_prov(m):
@@ -180,10 +239,11 @@ def recommend(
     n_recommendations: int = 10,
     n_pages_pool: int = 5,
     selected_provider: Optional[str] = None,
+    selected_genre: Optional[str] = None,
     region: str = "AR",
 ) -> tuple[pd.DataFrame, dict]:
     """
-    Calcula recomendaciones cruzando los gustos de N personas con filtro opcional de plataforma de streaming.
+    Calcula recomendaciones cruzando los gustos de N personas con filtros opcionales de plataforma y género.
     """
     taste_vectors = []
     all_found_movies = []
@@ -211,10 +271,27 @@ def recommend(
         if not pool_filtered:
             print(f"[WARNING] No se encontraron películas disponibles en {selected_provider!r}.")
 
+    # Filtrar por género si fue seleccionado
+    if selected_genre and selected_genre != "Todos los géneros":
+        genre_map = get_movie_genres()
+        target_id = genre_map.get(selected_genre)
+        if target_id is not None:
+            pool_filtered = [m for m in pool_filtered if target_id in m.get("genre_ids", [])]
+        else:
+            pool_filtered = [m for m in pool_filtered if selected_genre in m.get("genres", [])]
+        if not pool_filtered:
+            print(f"[WARNING] No se encontraron películas del género {selected_genre!r}.")
+
     if not pool_filtered:
+        filters_desc = []
+        if selected_provider and selected_provider != "Todas las plataformas":
+            filters_desc.append(f"plataforma '{selected_provider}'")
+        if selected_genre and selected_genre != "Todos los géneros":
+            filters_desc.append(f"género '{selected_genre}'")
+        f_str = " y ".join(filters_desc) if filters_desc else "seleccionados"
         raise ValueError(
-            f"No hay películas disponibles en el catálogo para el filtro de plataforma: {selected_provider}. "
-            "Probá seleccionando 'Todas las plataformas' o ampliando las páginas de búsqueda."
+            f"No hay películas disponibles en el catálogo para los filtros de {f_str}. "
+            "Probá seleccionando 'Todos los géneros' / 'Todas las plataformas' o ampliando las páginas de búsqueda."
         )
 
     # Calcular embeddings y similitud coseno
@@ -235,8 +312,15 @@ def recommend(
     else:
         df_results["providers_str"] = "No disponible en streaming"
 
-    df_results = df_results[["title", "score", "vote_average", "providers_str", "overview"]]
-    df_results.rename(columns={"providers_str": "providers"}, inplace=True)
+    if "genres" in df_results.columns:
+        df_results["genres_str"] = df_results["genres"].apply(
+            lambda g: ", ".join(g) if isinstance(g, list) and g else "Sin género"
+        )
+    else:
+        df_results["genres_str"] = "Sin género"
+
+    df_results = df_results[["title", "score", "vote_average", "genres_str", "providers_str", "overview"]]
+    df_results.rename(columns={"providers_str": "providers", "genres_str": "genres"}, inplace=True)
     df_results["score"] = df_results["score"].round(3)
 
     extra_data = {
@@ -245,6 +329,7 @@ def recommend(
         "all_found_movies": all_found_movies,
         "top_recommendations": top_recommendations,
         "selected_provider": selected_provider,
+        "selected_genre": selected_genre,
         "region": region,
     }
 
@@ -308,7 +393,12 @@ def plot_taste_map(extra_data: dict, save_path: str = None, ax: plt.Axes = None)
         ax.annotate(top_recommendations[0]["title"], rec_coords[0], fontsize=9, weight="bold", color="#1B5E20")
 
     ax.legend()
-    title_suffix = f" (Plataforma: {extra_data.get('selected_provider')})" if extra_data.get('selected_provider') and extra_data.get('selected_provider') != "Todas las plataformas" else ""
+    title_suffix = ""
+    if extra_data.get('selected_provider') and extra_data.get('selected_provider') != "Todas las plataformas":
+        title_suffix += f" (Plataforma: {extra_data.get('selected_provider')})"
+    if extra_data.get('selected_genre') and extra_data.get('selected_genre') != "Todos los géneros":
+        title_suffix += f" (Género: {extra_data.get('selected_genre')})"
+
     ax.set_title(f"Movie Match - Mapa de Gustos y Recomendaciones en Espacio de Embeddings (PCA 2D){title_suffix}")
     ax.set_xlabel("PC1")
     ax.set_ylabel("PC2")
@@ -325,6 +415,7 @@ if __name__ == "__main__":
     parser.add_argument("--save-plot", type=str, help="Ruta para guardar el gráfico PCA generado")
     parser.add_argument("--demo", action="store_true", help="Ejecutar con datos de prueba predeterminados")
     parser.add_argument("--provider", type=str, default="Todas las plataformas", help="Filtrar por plataforma (ej: Netflix, Disney Plus, Max)")
+    parser.add_argument("--genre", type=str, default="Todos los géneros", help="Filtrar por género (ej: Acción, Comedia, Ciencia ficción)")
     parser.add_argument("--region", type=str, default="AR", help="Código de país para disponibilidad (ej: AR, ES, MX, US)")
     args = parser.parse_args()
 
@@ -346,12 +437,13 @@ if __name__ == "__main__":
             p1 = ["Interstellar", "Eternal Sunshine of the Spotless Mind", "Whiplash"]
             p2 = ["Coco", "La La Land", "Amelie"]
 
-    print(f"\nProcesando gustos y consultando TMDB (Filtro Plataforma: {args.provider}, País: {args.region})...")
-    df_recs, extra = recommend([p1, p2], selected_provider=args.provider, region=args.region)
+    print(f"\nProcesando gustos y consultando TMDB (Plataforma: {args.provider}, Género: {args.genre}, País: {args.region})...")
+    df_recs, extra = recommend([p1, p2], selected_provider=args.provider, selected_genre=args.genre, region=args.region)
     
     print("\nTop Recomendaciones:")
     print(df_recs.to_string(index=False))
 
     save_plot_path = args.save_plot or "mapa_gustos.png"
     plot_taste_map(extra, save_path=save_plot_path)
+
 
