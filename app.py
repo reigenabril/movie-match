@@ -104,9 +104,22 @@ selected_region_label = st.sidebar.selectbox(
 )
 selected_region = region_options[selected_region_label]
 
+@st.cache_data(show_spinner=False, ttl=3600)
+def cached_get_genres():
+    return get_movie_genres()
+
+@st.cache_data(show_spinner=False, ttl=3600)
+def cached_recommend(p1_tuple: tuple[str, ...], p2_tuple: tuple[str, ...], selected_provider: str, selected_genre: str, region: str):
+    return recommend(
+        [list(p1_tuple), list(p2_tuple)],
+        selected_provider=selected_provider,
+        selected_genre=selected_genre,
+        region=region,
+    )
+
 st.sidebar.markdown("---")
 st.sidebar.subheader("🎭 Género de Película")
-genres_dict = get_movie_genres()
+genres_dict = cached_get_genres()
 selected_genre = st.sidebar.selectbox(
     "Filtrar por Género (opcional)",
     options=list(genres_dict.keys()),
@@ -145,8 +158,9 @@ if st.button("Buscar Recomendaciones"):
     else:
         with st.spinner("Analizando sinopsis y filtrando catálogo..."):
             try:
-                df_recs, extra = recommend(
-                    [p1_list, p2_list],
+                df_recs, extra = cached_recommend(
+                    tuple(p1_list),
+                    tuple(p2_list),
                     selected_provider=selected_provider,
                     selected_genre=selected_genre,
                     region=selected_region,

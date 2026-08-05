@@ -13,6 +13,8 @@ from sentence_transformers import SentenceTransformer
 
 from concurrent.futures import ThreadPoolExecutor
 
+from functools import lru_cache
+
 # Cargar variables de entorno desde .env
 load_dotenv()
 
@@ -64,25 +66,18 @@ DEFAULT_GENRES = {
     "Oeste": 37,
 }
 
-_genres_cache = None
-
+@lru_cache(maxsize=16)
 def get_movie_genres() -> dict[str, int | None]:
     """Obtiene el mapeo de nombres de géneros a IDs desde TMDB (con fallback local)."""
-    global _genres_cache
-    if _genres_cache is not None:
-        return _genres_cache
-
     try:
         data = tmdb_get("/genre/movie/list")
         genres_list = data.get("genres", [])
         mapping = {"Todos los géneros": None}
         for g in genres_list:
             mapping[g["name"].capitalize()] = g["id"]
-        _genres_cache = mapping
-        return _genres_cache
+        return mapping
     except Exception:
-        _genres_cache = DEFAULT_GENRES
-        return _genres_cache
+        return DEFAULT_GENRES
 
 def get_genre_id_to_name_map() -> dict[int, str]:
     """Retorna un mapeo inverso de ID a Nombre de género."""
@@ -97,12 +92,14 @@ def get_genre_id_to_name_map() -> dict[int, str]:
 # Modelo de embeddings de sinopsis
 _model = None
 
+@lru_cache(maxsize=1)
 def get_embedding_model():
     global _model
     if _model is None:
         _model = SentenceTransformer("all-MiniLM-L6-v2")
     return _model
 
+@lru_cache(maxsize=2048)
 def embed_text(text: str) -> np.ndarray:
     model = get_embedding_model()
     return model.encode(text, normalize_embeddings=True)
@@ -114,10 +111,11 @@ def tmdb_get(endpoint: str, params: dict = None) -> dict:
         )
     params = params or {}
     params.setdefault("language", "es-AR")
-    response = requests.get(f"{TMDB_BASE}{endpoint}", params=params, headers=HEADERS)
+    response = requests.get(f"{TMDB_BASE}{endpoint}", params=params, headers=HEADERS, timeout=10)
     response.raise_for_status()
     return response.json()
 
+@lru_cache(maxsize=2048)
 def get_movie_watch_providers(movie_id: int, region: str = "AR") -> list[str]:
     """Obtiene la lista de plataformas de streaming por suscripción (flatrate) para una película."""
     try:
@@ -163,6 +161,7 @@ def matches_provider(selected_provider: str, movie_providers: list[str]) -> bool
             return True
     return False
 
+@lru_cache(maxsize=512)
 def search_movie(title: str, region: str = "AR") -> dict | None:
     """Busca una película por título y devuelve datos básicos + overview + plataformas."""
     data = tmdb_get("/search/movie", {"query": title})
@@ -200,6 +199,7 @@ def build_taste_vector(movie_titles: list[str], region: str = "AR") -> tuple[np.
     taste_vector /= np.linalg.norm(taste_vector)
     return taste_vector, found
 
+@lru_cache(maxsize=32)
 def get_candidate_pool(n_pages: int = 5, region: str = "AR", fetch_providers: bool = True) -> list[dict]:
     """Obtiene un catálogo de películas populares y top rated desde TMDB con información de plataformas y géneros."""
     candidates = {}
