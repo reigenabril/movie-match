@@ -150,7 +150,7 @@ min_vote = st.sidebar.slider(
 )
 
 @st.cache_data(show_spinner=False, ttl=3600)
-def cached_recommend(
+def cached_recommend_v2(
     p1_tuple: tuple[str, ...],
     p2_tuple: tuple[str, ...],
     selected_provider: str,
@@ -201,7 +201,7 @@ if st.button("Buscar Recomendaciones"):
     else:
         with st.spinner("Analizando sinopsis y filtrando catálogo..."):
             try:
-                df_recs, extra = cached_recommend(
+                df_recs, extra = cached_recommend_v2(
                     tuple(p1_list),
                     tuple(p2_list),
                     selected_provider=selected_provider,
