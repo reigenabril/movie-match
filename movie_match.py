@@ -213,6 +213,7 @@ def get_candidate_pool(n_pages: int = 5, region: str = "AR", fetch_providers: bo
                         "title": m["title"],
                         "overview": m["overview"],
                         "vote_average": m.get("vote_average"),
+                        "release_date": m.get("release_date", ""),
                         "poster_path": m.get("poster_path"),
                         "genre_ids": m.get("genre_ids", []),
                         "providers": [],
@@ -240,10 +241,13 @@ def recommend(
     n_pages_pool: int = 5,
     selected_provider: Optional[str] = None,
     selected_genre: Optional[str] = None,
+    min_year: Optional[int] = None,
+    max_year: Optional[int] = None,
+    min_vote_average: float = 0.0,
     region: str = "AR",
 ) -> tuple[pd.DataFrame, dict]:
     """
-    Calcula recomendaciones cruzando los gustos de N personas con filtros opcionales de plataforma y género.
+    Calcula recomendaciones cruzando los gustos de N personas con filtros opcionales de plataforma, género, año y calificación.
     """
     taste_vectors = []
     all_found_movies = []
@@ -268,8 +272,6 @@ def recommend(
     # Filtrar por plataforma si fue seleccionada
     if selected_provider and selected_provider != "Todas las plataformas":
         pool_filtered = [m for m in pool_filtered if matches_provider(selected_provider, m.get("providers", []))]
-        if not pool_filtered:
-            print(f"[WARNING] No se encontraron películas disponibles en {selected_provider!r}.")
 
     # Filtrar por género si fue seleccionado
     if selected_genre and selected_genre != "Todos los géneros":
@@ -279,8 +281,23 @@ def recommend(
             pool_filtered = [m for m in pool_filtered if target_id in m.get("genre_ids", [])]
         else:
             pool_filtered = [m for m in pool_filtered if selected_genre in m.get("genres", [])]
-        if not pool_filtered:
-            print(f"[WARNING] No se encontraron películas del género {selected_genre!r}.")
+
+    # Filtrar por calificación mínima TMDB
+    if min_vote_average > 0.0:
+        pool_filtered = [m for m in pool_filtered if (m.get("vote_average") or 0.0) >= min_vote_average]
+
+    # Filtrar por rango de años de estreno
+    if min_year is not None or max_year is not None:
+        def _year_ok(m):
+            rd = m.get("release_date", "")
+            if rd and len(rd) >= 4 and rd[:4].isdigit():
+                y = int(rd[:4])
+                if min_year is not None and y < min_year:
+                    return False
+                if max_year is not None and y > max_year:
+                    return False
+            return True
+        pool_filtered = [m for m in pool_filtered if _year_ok(m)]
 
     if not pool_filtered:
         filters_desc = []
@@ -288,10 +305,14 @@ def recommend(
             filters_desc.append(f"plataforma '{selected_provider}'")
         if selected_genre and selected_genre != "Todos los géneros":
             filters_desc.append(f"género '{selected_genre}'")
-        f_str = " y ".join(filters_desc) if filters_desc else "seleccionados"
+        if min_vote_average > 0.0:
+            filters_desc.append(f"puntuación mínima ⭐ {min_vote_average}")
+        if min_year or max_year:
+            filters_desc.append(f"rango de años {min_year or 'inicio'}-{max_year or 'actual'}")
+        f_str = ", ".join(filters_desc) if filters_desc else "seleccionados"
         raise ValueError(
             f"No hay películas disponibles en el catálogo para los filtros de {f_str}. "
-            "Probá seleccionando 'Todos los géneros' / 'Todas las plataformas' o ampliando las páginas de búsqueda."
+            "Probá flexibilizar los filtros en la barra lateral."
         )
 
     # Calcular embeddings y similitud coseno
@@ -319,8 +340,15 @@ def recommend(
     else:
         df_results["genres_str"] = "Sin género"
 
-    df_results = df_results[["title", "score", "vote_average", "genres_str", "providers_str", "overview"]]
-    df_results.rename(columns={"providers_str": "providers", "genres_str": "genres"}, inplace=True)
+    if "release_date" in df_results.columns:
+        df_results["year_str"] = df_results["release_date"].apply(
+            lambda d: d[:4] if isinstance(d, str) and len(d) >= 4 else "N/A"
+        )
+    else:
+        df_results["year_str"] = "N/A"
+
+    df_results = df_results[["title", "year_str", "score", "vote_average", "genres_str", "providers_str", "overview"]]
+    df_results.rename(columns={"providers_str": "providers", "genres_str": "genres", "year_str": "Año"}, inplace=True)
     df_results["score"] = df_results["score"].round(3)
 
     extra_data = {
@@ -330,6 +358,9 @@ def recommend(
         "top_recommendations": top_recommendations,
         "selected_provider": selected_provider,
         "selected_genre": selected_genre,
+        "min_year": min_year,
+        "max_year": max_year,
+        "min_vote_average": min_vote_average,
         "region": region,
     }
 
@@ -416,6 +447,9 @@ if __name__ == "__main__":
     parser.add_argument("--demo", action="store_true", help="Ejecutar con datos de prueba predeterminados")
     parser.add_argument("--provider", type=str, default="Todas las plataformas", help="Filtrar por plataforma (ej: Netflix, Disney Plus, Max)")
     parser.add_argument("--genre", type=str, default="Todos los géneros", help="Filtrar por género (ej: Acción, Comedia, Ciencia ficción)")
+    parser.add_argument("--min-year", type=int, default=None, help="Año mínimo de estreno")
+    parser.add_argument("--max-year", type=int, default=None, help="Año máximo de estreno")
+    parser.add_argument("--min-vote", type=float, default=0.0, help="Puntuación mínima de TMDB (0 a 10)")
     parser.add_argument("--region", type=str, default="AR", help="Código de país para disponibilidad (ej: AR, ES, MX, US)")
     args = parser.parse_args()
 
@@ -437,13 +471,22 @@ if __name__ == "__main__":
             p1 = ["Interstellar", "Eternal Sunshine of the Spotless Mind", "Whiplash"]
             p2 = ["Coco", "La La Land", "Amelie"]
 
-    print(f"\nProcesando gustos y consultando TMDB (Plataforma: {args.provider}, Género: {args.genre}, País: {args.region})...")
-    df_recs, extra = recommend([p1, p2], selected_provider=args.provider, selected_genre=args.genre, region=args.region)
+    print(f"\nProcesando gustos y consultando TMDB (Plataforma: {args.provider}, Género: {args.genre}, Años: {args.min_year}-{args.max_year}, Nota Mín: {args.min_vote}, País: {args.region})...")
+    df_recs, extra = recommend(
+        [p1, p2],
+        selected_provider=args.provider,
+        selected_genre=args.genre,
+        min_year=args.min_year,
+        max_year=args.max_year,
+        min_vote_average=args.min_vote,
+        region=args.region,
+    )
     
     print("\nTop Recomendaciones:")
     print(df_recs.to_string(index=False))
 
     save_plot_path = args.save_plot or "mapa_gustos.png"
     plot_taste_map(extra, save_path=save_plot_path)
+
 
 

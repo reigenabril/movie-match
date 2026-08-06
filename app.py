@@ -127,6 +127,49 @@ selected_genre = st.sidebar.selectbox(
     help="Si seleccionás un género, solo se recomendarán películas pertenecientes a esa categoría."
 )
 
+st.sidebar.markdown("---")
+st.sidebar.subheader("📅 Año de Estreno")
+min_year, max_year = st.sidebar.slider(
+    "Rango de Años de Estreno",
+    min_value=1950,
+    max_value=2026,
+    value=(1970, 2026),
+    step=1,
+    help="Filtra películas estrenadas dentro de este rango de años."
+)
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("⭐ Calificación Mínima (TMDB)")
+min_vote = st.sidebar.slider(
+    "Puntuación Mínima (0 a 10)",
+    min_value=0.0,
+    max_value=10.0,
+    value=6.0,
+    step=0.5,
+    help="Solo se recomendarán películas con una calificación media mayor o igual a este valor en TMDB."
+)
+
+@st.cache_data(show_spinner=False, ttl=3600)
+def cached_recommend(
+    p1_tuple: tuple[str, ...],
+    p2_tuple: tuple[str, ...],
+    selected_provider: str,
+    selected_genre: str,
+    min_year: int,
+    max_year: int,
+    min_vote: float,
+    region: str,
+):
+    return recommend(
+        [list(p1_tuple), list(p2_tuple)],
+        selected_provider=selected_provider,
+        selected_genre=selected_genre,
+        min_year=min_year,
+        max_year=max_year,
+        min_vote_average=min_vote,
+        region=region,
+    )
+
 col1, col2 = st.columns(2)
 
 with col1:
@@ -163,6 +206,9 @@ if st.button("Buscar Recomendaciones"):
                     tuple(p2_list),
                     selected_provider=selected_provider,
                     selected_genre=selected_genre,
+                    min_year=min_year,
+                    max_year=max_year,
+                    min_vote=min_vote,
                     region=selected_region,
                 )
                 top_recs = extra["top_recommendations"]
@@ -172,6 +218,10 @@ if st.button("Buscar Recomendaciones"):
                     filters_info.append(f"Plataforma: **{selected_provider}** ({selected_region_label})")
                 if selected_genre != "Todos los géneros":
                     filters_info.append(f"Género: **{selected_genre}**")
+                if min_year > 1950 or max_year < 2026:
+                    filters_info.append(f"Años: **{min_year} - {max_year}**")
+                if min_vote > 0.0:
+                    filters_info.append(f"Nota mín.: **⭐ {min_vote}**")
 
                 if filters_info:
                     st.info("🍿 **Filtros activos:** " + " | ".join(filters_info))
@@ -191,10 +241,11 @@ if st.button("Buscar Recomendaciones"):
                                 else "https://via.placeholder.com/500x750?text=No+Poster"
                             )
                             st.image(poster_url, use_container_width=True)
-                            st.markdown(f"**{m['title']}**")
+                            year_badge = f" ({m['release_date'][:4]})" if m.get("release_date") and len(m["release_date"]) >= 4 else ""
+                            st.markdown(f"**{m['title']}**{year_badge}")
                             match_pct = int(m['score'] * 100)
                             st.markdown(f"<span class='score-badge'>Match: {match_pct}%</span>", unsafe_allow_html=True)
-                            st.caption(f"Rating: {m.get('vote_average', 'N/A')} / 10")
+                            st.caption(f"⭐ Rating: **{m.get('vote_average', 'N/A')}** / 10")
                             
                             g_list = m.get("genres", [])
                             if g_list:
@@ -228,4 +279,5 @@ if st.button("Buscar Recomendaciones"):
 
             except Exception as e:
                 st.error(f"Ocurrió un error al procesar las recomendaciones: {e}")
+
 
