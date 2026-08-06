@@ -325,6 +325,32 @@ def recommend(
     ranking = sorted(pool_filtered, key=lambda x: x["score"], reverse=True)
     top_recommendations = ranking[:n_recommendations]
 
+    # Calcular a qué película ingresada se parece más cada recomendación
+    input_movies_flat = []
+    for p_idx, found_list in enumerate(all_found_movies, 1):
+        for m_inp in found_list:
+            if m_inp.get("overview"):
+                input_movies_flat.append({
+                    "title": m_inp["title"],
+                    "person": f"Persona {p_idx}",
+                    "vec": embed_text(m_inp["overview"])
+                })
+
+    for m in top_recommendations:
+        m_vec = embed_text(m["overview"])
+        best_title = "N/A"
+        best_person = ""
+        best_sim = -1.0
+        for inp in input_movies_flat:
+            sim = float(cosine_similarity(m_vec.reshape(1, -1), inp["vec"].reshape(1, -1))[0][0])
+            if sim > best_sim:
+                best_sim = sim
+                best_title = inp["title"]
+                best_person = inp["person"]
+        m["closest_movie"] = best_title
+        m["closest_person"] = best_person
+        m["closest_similarity_str"] = f"{best_title} ({best_person})"
+
     df_results = pd.DataFrame(top_recommendations)
     if "providers" in df_results.columns:
         df_results["providers_str"] = df_results["providers"].apply(
@@ -347,8 +373,10 @@ def recommend(
     else:
         df_results["year_str"] = "N/A"
 
-    df_results = df_results[["title", "year_str", "score", "vote_average", "genres_str", "providers_str", "overview"]]
-    df_results.rename(columns={"providers_str": "providers", "genres_str": "genres", "year_str": "Año"}, inplace=True)
+    df_results["closest_str"] = [m.get("closest_similarity_str", "N/A") for m in top_recommendations]
+
+    df_results = df_results[["title", "year_str", "score", "closest_str", "vote_average", "genres_str", "providers_str", "overview"]]
+    df_results.rename(columns={"providers_str": "providers", "genres_str": "genres", "year_str": "Año", "closest_str": "Más parecida a"}, inplace=True)
     df_results["score"] = df_results["score"].round(3)
 
     extra_data = {

@@ -255,6 +255,9 @@ if st.button("Buscar Recomendaciones"):
                             prov_text = ", ".join(provs) if provs else "Sin streaming"
                             st.caption(f"📺 **Plataformas:** {prov_text}")
 
+                            if m.get("closest_movie"):
+                                st.caption(f"💡 **Más parecida a:** {m['closest_movie']} *({m.get('closest_person', '')})*")
+
                 st.write("---")
                 st.subheader("Tabla Completa de Resultados")
                 st.dataframe(
