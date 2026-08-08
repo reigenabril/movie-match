@@ -8,12 +8,14 @@ Resuelve el clásico dilema: *"¿Qué vemos hoy?"* analizando el significado sem
 
 ## Características Principales
 
+- **Modo Grupo (N Personas)**: Permite combinar los gustos de 2 o más participantes con pesos e importancia personalizada por persona.
+- **Preferencias Negativas ("Veto")**: Permite añadir películas desaprobadas (restando/penalizando su embedding semántico) y vetar géneros no deseados.
 - **Interfaz Web Interactiva (Streamlit)**: Aplicación web moderna (`app.py`) con visualización de carátulas/posters de TMDB, porcentajes de coincidencia y gráficos vectoriales.
 - **Orquestación con Apache Airflow & Docker**: DAG modular (`movie_match_pipeline`) desplegado en Docker Compose.
 - **Búsqueda en vivo**: Integración con la API v4 de TMDB.
 - **Embeddings Semánticos**: Uso de `sentence-transformers/all-MiniLM-L6-v2` (Hugging Face) para vectorizar las sinopsis.
 - **Similitud Coseno**: Medición de distancia semántica entre el gusto conjunto y el catálogo de candidatas.
-- **Visualización 2D (PCA)**: Gráfico del espacio vectorial que muestra las distancias entre las películas de cada persona, la intersección y las recomendaciones.
+- **Visualización 2D (PCA)**: Gráfico del espacio vectorial que muestra las distancias entre las películas de cada integrante del grupo, películas vetadas y recomendaciones.
 - **Seguridad**: Configuración con variables de entorno (`python-dotenv`) para resguardar tokens de API.
 
 ---

@@ -245,35 +245,96 @@ def recommend(
     max_year: Optional[int] = None,
     min_vote_average: float = 0.0,
     region: str = "AR",
+    people_names: Optional[list[str]] = None,
+    people_weights: Optional[list[float]] = None,
+    disliked_movies: Optional[list[str]] = None,
+    disliked_genres: Optional[list[str]] = None,
+    dislike_penalty_weight: float = 0.4,
 ) -> tuple[pd.DataFrame, dict]:
     """
-    Calcula recomendaciones cruzando los gustos de N personas con filtros opcionales de plataforma, género, año y calificación.
+    Calcula recomendaciones cruzando los gustos de N personas (con nombres y pesos personalizados)
+    y aplicando filtros de plataforma, género, año, nota mínima y veto/preferencias negativas.
     """
+    n_people = len(people_movies)
+    if n_people == 0:
+        raise ValueError("Debes ingresar al menos los gustos de una persona.")
+
+    names = (
+        people_names
+        if (people_names and len(people_names) == n_people)
+        else [f"Persona {i+1}" for i in range(n_people)]
+    )
+    raw_weights = (
+        people_weights
+        if (people_weights and len(people_weights) == n_people)
+        else [1.0] * n_people
+    )
+    total_w = sum(raw_weights) if sum(raw_weights) > 0 else 1.0
+    weights = [w / total_w for w in raw_weights]
+
     taste_vectors = []
     all_found_movies = []
     seen_ids = set()
 
-    for idx, titles in enumerate(people_movies, 1):
+    for idx, (titles, name) in enumerate(zip(people_movies, names), 1):
         v, found = build_taste_vector(titles, region=region)
         taste_vectors.append(v)
         all_found_movies.append(found)
         for m in found:
             seen_ids.add(m["id"])
-        print(f"Persona {idx} encontró: {[m['title'] for m in found]}")
+        print(f"[{name}] encontró: {[m['title'] for m in found]}")
 
-    # Punto medio entre todos los vectores de gusto
-    combined_vector = np.mean(taste_vectors, axis=0)
+    # Vector combinado con pesos por persona
+    weighted_vecs = [w * v for w, v in zip(weights, taste_vectors)]
+    combined_vector = np.sum(weighted_vecs, axis=0)
     combined_vector /= np.linalg.norm(combined_vector)
+
+    # Procesar películas vetadas / desaprobadas (preferencias negativas)
+    disliked_found = []
+    disliked_vectors = []
+    disliked_ids = set()
+
+    if disliked_movies:
+        for title in disliked_movies:
+            if not title.strip():
+                continue
+            movie = search_movie(title.strip(), region=region)
+            if movie and movie.get("overview"):
+                disliked_found.append(movie)
+                disliked_ids.add(movie["id"])
+                disliked_vectors.append(embed_text(movie["overview"]))
+        if disliked_found:
+            print(f"[Preferencias Negativas] Películas vetadas cargadas: {[m['title'] for m in disliked_found]}")
 
     # Catálogo candidatas
     pool = get_candidate_pool(n_pages=n_pages_pool, region=region)
-    pool_filtered = [m for m in pool if m["id"] not in seen_ids]
+    pool_filtered = [m for m in pool if m["id"] not in seen_ids and m["id"] not in disliked_ids]
+
+    # Excluir películas vetadas por género si aplica
+    if disliked_genres:
+        genre_map = get_movie_genres()
+        disliked_genre_ids = set()
+        for dg in disliked_genres:
+            gid = genre_map.get(dg)
+            if gid is not None:
+                disliked_genre_ids.add(gid)
+
+        def _has_disliked_genre(m):
+            m_gids = set(m.get("genre_ids", []))
+            if m_gids.intersection(disliked_genre_ids):
+                return True
+            m_gnames = set(m.get("genres", []))
+            if any(dg in m_gnames for dg in disliked_genres):
+                return True
+            return False
+
+        pool_filtered = [m for m in pool_filtered if not _has_disliked_genre(m)]
 
     # Filtrar por plataforma si fue seleccionada
     if selected_provider and selected_provider != "Todas las plataformas":
         pool_filtered = [m for m in pool_filtered if matches_provider(selected_provider, m.get("providers", []))]
 
-    # Filtrar por género si fue seleccionado
+    # Filtrar por género preferido si fue seleccionado
     if selected_genre and selected_genre != "Todos los géneros":
         genre_map = get_movie_genres()
         target_id = genre_map.get(selected_genre)
@@ -309,30 +370,41 @@ def recommend(
             filters_desc.append(f"puntuación mínima ⭐ {min_vote_average}")
         if min_year or max_year:
             filters_desc.append(f"rango de años {min_year or 'inicio'}-{max_year or 'actual'}")
+        if disliked_genres:
+            filters_desc.append(f"géneros vetados '{', '.join(disliked_genres)}'")
         f_str = ", ".join(filters_desc) if filters_desc else "seleccionados"
         raise ValueError(
             f"No hay películas disponibles en el catálogo para los filtros de {f_str}. "
-            "Probá flexibilizar los filtros en la barra lateral."
+            "Probá flexibilizar los filtros."
         )
 
-    # Calcular embeddings y similitud coseno
+    # Calcular embeddings y similitud coseno (aplicando penalización por disgustos)
     pool_embeddings = np.array([embed_text(m["overview"]) for m in pool_filtered])
-    sims = cosine_similarity(combined_vector.reshape(1, -1), pool_embeddings)[0]
+    pos_sims = cosine_similarity(combined_vector.reshape(1, -1), pool_embeddings)[0]
 
-    for m, s in zip(pool_filtered, sims):
+    if disliked_vectors:
+        dis_embeddings = np.array(disliked_vectors)
+        dis_sims_matrix = cosine_similarity(dis_embeddings, pool_embeddings) # (n_dislikes, n_candidates)
+        max_dis_sims = np.max(dis_sims_matrix, axis=0) # max sim a cualquier película vetada
+        final_scores = pos_sims - (dislike_penalty_weight * np.maximum(0.0, max_dis_sims))
+    else:
+        final_scores = pos_sims
+
+    for m, s, pos_s in zip(pool_filtered, final_scores, pos_sims):
         m["score"] = float(s)
+        m["raw_pos_score"] = float(pos_s)
 
     ranking = sorted(pool_filtered, key=lambda x: x["score"], reverse=True)
     top_recommendations = ranking[:n_recommendations]
 
     # Calcular a qué película ingresada se parece más cada recomendación
     input_movies_flat = []
-    for p_idx, found_list in enumerate(all_found_movies, 1):
+    for p_idx, (name, found_list) in enumerate(zip(names, all_found_movies), 1):
         for m_inp in found_list:
             if m_inp.get("overview"):
                 input_movies_flat.append({
                     "title": m_inp["title"],
-                    "person": f"Persona {p_idx}",
+                    "person": name,
                     "vec": embed_text(m_inp["overview"])
                 })
 
@@ -390,24 +462,36 @@ def recommend(
         "max_year": max_year,
         "min_vote_average": min_vote_average,
         "region": region,
+        "people_names": names,
+        "people_weights": weights,
+        "disliked_found": disliked_found,
+        "disliked_genres": disliked_genres,
     }
 
     return df_results, extra_data
 
 def plot_taste_map(extra_data: dict, save_path: str = None, ax: plt.Axes = None):
-    """Genera el gráfico 2D PCA con el mapa de gustos y las recomendaciones."""
+    """Genera el gráfico 2D PCA con el mapa de gustos N-personas, películas vetadas y recomendaciones."""
     taste_vectors = extra_data["taste_vectors"]
     combined_vector = extra_data["combined_vector"]
     all_found_movies = extra_data["all_found_movies"]
     top_recommendations = extra_data["top_recommendations"]
+    people_names = extra_data.get("people_names", [f"Persona {i+1}" for i in range(len(all_found_movies))])
+    disliked_found = extra_data.get("disliked_found", [])
 
     all_vecs = []
     labels_info = []
 
     for idx, found in enumerate(all_found_movies):
+        p_name = people_names[idx] if idx < len(people_names) else f"Persona {idx+1}"
         for m in found:
             all_vecs.append(embed_text(m["overview"]))
-            labels_info.append((f"P{idx+1}", m["title"]))
+            labels_info.append((p_name, m["title"]))
+
+    # Películas vetadas / disgustos
+    for m in disliked_found:
+        all_vecs.append(embed_text(m["overview"]))
+        labels_info.append(("VETO", m["title"]))
 
     all_vecs.append(combined_vector)
     labels_info.append(("COMBINED", "Gusto combinado"))
@@ -426,82 +510,96 @@ def plot_taste_map(extra_data: dict, save_path: str = None, ax: plt.Axes = None)
         fig = ax.get_figure()
 
     curr_idx = 0
-    colors = ["#4C72B0", "#DD8452", "#9370DB", "#E6550D"]
+    colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#9467bd", "#8c564b", "#e377c2", "#17becf"]
 
     for p_idx, found in enumerate(all_found_movies):
         color = colors[p_idx % len(colors)]
+        p_name = people_names[p_idx] if p_idx < len(people_names) else f"Persona {p_idx+1}"
         n_m = len(found)
         p_coords = coords[curr_idx : curr_idx + n_m]
-        ax.scatter(p_coords[:, 0], p_coords[:, 1], color=color, s=100, label=f"Persona {p_idx+1}")
+        ax.scatter(p_coords[:, 0], p_coords[:, 1], color=color, s=110, label=p_name, zorder=3)
         for i, m in enumerate(found):
-            ax.annotate(m["title"], p_coords[i], fontsize=8, alpha=0.9)
+            ax.annotate(m["title"], p_coords[i], fontsize=8, alpha=0.9, color=color, weight="bold")
         curr_idx += n_m
+
+    # Dislikes / Vetadas
+    if disliked_found:
+        n_dis = len(disliked_found)
+        dis_coords = coords[curr_idx : curr_idx + n_dis]
+        ax.scatter(dis_coords[:, 0], dis_coords[:, 1], color="#d62728", marker="v", s=130, label="Películas Vetadas", zorder=4)
+        for i, m in enumerate(disliked_found):
+            ax.annotate(f"🚫 {m['title']}", dis_coords[i], fontsize=8, alpha=0.9, color="#b71c1c", weight="bold")
+        curr_idx += n_dis
 
     # Combined vector
     comb_coord = coords[curr_idx : curr_idx + 1]
-    ax.scatter(comb_coord[:, 0], comb_coord[:, 1], color="black", marker="X", s=220, label="Gusto combinado")
+    ax.scatter(comb_coord[:, 0], comb_coord[:, 1], color="black", marker="X", s=240, label="Gusto Combinado", zorder=5)
     curr_idx += 1
 
     # Recommendations
     n_recs = len(top_recommendations)
     rec_coords = coords[curr_idx : curr_idx + n_recs]
-    ax.scatter(rec_coords[:, 0], rec_coords[:, 1], color="#55A868", s=60, alpha=0.7, label="Recomendaciones")
+    ax.scatter(rec_coords[:, 0], rec_coords[:, 1], color="#2ca02c", s=70, alpha=0.7, label="Recomendaciones", zorder=2)
 
     # Resaltar la #1
     if top_recommendations:
-        ax.annotate(top_recommendations[0]["title"], rec_coords[0], fontsize=9, weight="bold", color="#1B5E20")
+        ax.annotate(top_recommendations[0]["title"], rec_coords[0], fontsize=9, weight="bold", color="#1b5e20")
 
-    ax.legend()
+    ax.legend(loc="best")
     title_suffix = ""
     if extra_data.get('selected_provider') and extra_data.get('selected_provider') != "Todas las plataformas":
         title_suffix += f" (Plataforma: {extra_data.get('selected_provider')})"
     if extra_data.get('selected_genre') and extra_data.get('selected_genre') != "Todos los géneros":
         title_suffix += f" (Género: {extra_data.get('selected_genre')})"
 
-    ax.set_title(f"Movie Match - Mapa de Gustos y Recomendaciones en Espacio de Embeddings (PCA 2D){title_suffix}")
+    ax.set_title(f"Movie Match - Mapa de Gustos Grupo & Veto (PCA 2D){title_suffix}")
     ax.set_xlabel("PC1")
     ax.set_ylabel("PC2")
     ax.grid(True, linestyle="--", alpha=0.3)
 
     if save_path:
         fig.savefig(save_path, dpi=300)
-        print(f"Grafico guardado en: {save_path}")
+        print(f"Gráfico guardado en: {save_path}")
 
     return fig
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Movie Match - Recomendador por embeddings")
+    parser = argparse.ArgumentParser(description="Movie Match - Recomendador por embeddings (Grupo & Veto)")
     parser.add_argument("--save-plot", type=str, help="Ruta para guardar el gráfico PCA generado")
-    parser.add_argument("--demo", action="store_true", help="Ejecutar con datos de prueba predeterminados")
-    parser.add_argument("--provider", type=str, default="Todas las plataformas", help="Filtrar por plataforma (ej: Netflix, Disney Plus, Max)")
-    parser.add_argument("--genre", type=str, default="Todos los géneros", help="Filtrar por género (ej: Acción, Comedia, Ciencia ficción)")
+    parser.add_argument("--demo", action="store_true", help="Ejecutar con datos de prueba predeterminados (3 personas)")
+    parser.add_argument("--provider", type=str, default="Todas las plataformas", help="Filtrar por plataforma")
+    parser.add_argument("--genre", type=str, default="Todos los géneros", help="Filtrar por género")
     parser.add_argument("--min-year", type=int, default=None, help="Año mínimo de estreno")
     parser.add_argument("--max-year", type=int, default=None, help="Año máximo de estreno")
     parser.add_argument("--min-vote", type=float, default=0.0, help="Puntuación mínima de TMDB (0 a 10)")
-    parser.add_argument("--region", type=str, default="AR", help="Código de país para disponibilidad (ej: AR, ES, MX, US)")
+    parser.add_argument("--region", type=str, default="AR", help="Código de país para disponibilidad")
     args = parser.parse_args()
 
-    print("Movie Match - Recomendador por Embeddings Semánticos\n")
+    print("Movie Match - Recomendador por Embeddings Semánticos (Modo Grupo & Preferencias Negativas)\n")
 
     if args.demo:
+        people_movies = [
+            ["Interstellar", "Whiplash"],
+            ["Coco", "Amelie"],
+            ["Inception", "The Dark Knight"],
+        ]
+        people_names = ["Ana", "Carlos", "Sofia"]
+        disliked_movies = ["Twilight"]
+        disliked_genres = ["Terror"]
+    else:
         p1 = ["Interstellar", "Eternal Sunshine of the Spotless Mind", "Whiplash"]
         p2 = ["Coco", "La La Land", "Amelie"]
-    else:
-        print("Ingresá títulos de películas separadas por comas (ejemplo: Matrix, Inception, Avatar)\n")
-        raw_p1 = input("Persona 1 - ¿Qué películas te gustan?: ")
-        raw_p2 = input("Persona 2 - ¿Qué películas te gustan?: ")
+        people_movies = [p1, p2]
+        people_names = ["Persona 1", "Persona 2"]
+        disliked_movies = []
+        disliked_genres = []
 
-        p1 = [t.strip() for t in raw_p1.split(",") if t.strip()]
-        p2 = [t.strip() for t in raw_p2.split(",") if t.strip()]
-
-        if not p1 or not p2:
-            print("\nUsando datos de prueba por defecto ya que no ingresaste suficientes películas...\n")
-            p1 = ["Interstellar", "Eternal Sunshine of the Spotless Mind", "Whiplash"]
-            p2 = ["Coco", "La La Land", "Amelie"]
-
-    print(f"\nProcesando gustos y consultando TMDB (Plataforma: {args.provider}, Género: {args.genre}, Años: {args.min_year}-{args.max_year}, Nota Mín: {args.min_vote}, País: {args.region})...")
+    print(f"\nProcesando gustos y consultando TMDB (Participantes: {people_names}, Veto: {disliked_movies + disliked_genres})...")
     df_recs, extra = recommend(
-        [p1, p2],
+        people_movies,
+        people_names=people_names,
+        disliked_movies=disliked_movies,
+        disliked_genres=disliked_genres,
         selected_provider=args.provider,
         selected_genre=args.genre,
         min_year=args.min_year,
@@ -515,6 +613,7 @@ if __name__ == "__main__":
 
     save_plot_path = args.save_plot or "mapa_gustos.png"
     plot_taste_map(extra, save_path=save_plot_path)
+
 
 
 
