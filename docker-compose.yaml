@@ -17,7 +17,8 @@ x-airflow-common:
     - ./dags:/opt/airflow/dags
     - ./data:/opt/airflow/data
     - ./output:/opt/airflow/output
-    - ./movie_match.py:/opt/airflow/movie_match.py
+    - ./movie_match:/opt/airflow/movie_match
+    - ./cli.py:/opt/airflow/cli.py
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on:
     postgres:

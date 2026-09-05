@@ -41,19 +41,27 @@ Resuelve el clásico dilema: *"¿Qué vemos hoy?"* analizando el significado sem
 
 ```
 movie/
+├── movie_match/           # Paquete Python modular
+│   ├── __init__.py        # API pública del paquete
+│   ├── config.py          # Constantes, tokens y configuración de entorno
+│   ├── tmdb.py            # Cliente de la API de TMDB (búsqueda, catálogo y proveedores)
+│   ├── embeddings.py      # NLP y generación de embeddings (SentenceTransformers)
+│   ├── recommender.py     # Lógica matemática (vector de gusto ponderado, penalizaciones y similitud)
+│   ├── visualization.py   # Proyección 2D con PCA y generación de gráficos
+│   └── __main__.py        # Ejecución CLI modular (python -m movie_match)
 ├── app.py                 # Aplicación Web Interactiva con Streamlit
+├── cli.py                 # Punto de entrada directo por terminal
 ├── dags/
-│   └── movie_match_dag.py # DAG principal de Apache Airflow
+│   └── movie_match_dag.py # DAG de Apache Airflow (modular, sin código duplicado)
 ├── Dockerfile             # Imagen de Docker optimizada
 ├── docker-compose.yaml    # Orquestador multi-contenedor para Airflow
-├── data/                  # Almacenamiento local staging (catalogo y embeddings)
+├── data/                  # Almacenamiento local staging (catálogo y embeddings)
 ├── output/                # Artefactos generados (CSV de recomendaciones y gráficos)
 ├── .env.example           # Plantilla para variables de entorno (Token TMDB)
-├── .gitignore              # Archivos excluidos del repositorio (.env, cache, etc.)
-├── requirements.txt        # Dependencias de Python (requests, airflow, streamlit, etc.)
-├── movie_match.ipynb       # Notebook interactivo para pruebas rápidas
-├── movie_match.py          # Script ejecutable por consola (CLI interactivo)
-└── README.md               # Documentación del proyecto
+├── .gitignore             # Archivos excluidos del repositorio (.env, bases de datos locales, etc.)
+├── requirements.txt       # Dependencias de Python
+├── movie_match.ipynb      # Notebook interactivo para pruebas rápidas
+└── README.md              # Documentación del proyecto
 ```
 
 ---
@@ -102,7 +110,9 @@ Accedé a la interfaz de Airflow en `http://localhost:8080` (Usuario: `admin` / 
 ### Opción C: CLI Interactivo (Script en consola)
 
 ```bash
-python3 movie_match.py
+python3 cli.py --demo
+# O también mediante el módulo:
+python3 -m movie_match --demo
 ```
 
 ### Opción D: Notebook de Jupyter

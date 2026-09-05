@@ -4,17 +4,15 @@ import json
 import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
-from typing import Dict, List, Any
 
 from airflow import DAG
 from airflow.decorators import task
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_DIR = os.path.join(PROJECT_ROOT, "data")
-OUTPUT_DIR = os.path.join(PROJECT_ROOT, "output")
-
-os.makedirs(DATA_DIR, exist_ok=True)
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+from movie_match.config import DATA_DIR, OUTPUT_DIR
+from movie_match.tmdb import fetch_and_save_catalog
+from movie_match.embeddings import embed_texts
+from movie_match.recommender import recommend
+from movie_match.visualization import plot_taste_map
 
 default_args = {
     "owner": "movie_match",
@@ -41,63 +39,9 @@ with DAG(
         Task 1 (ETL - Extract): Obtiene películas populares y top rated desde TMDB API
         y las guarda en la capa Staging (data/catalog.json).
         """
-        import requests
-        from dotenv import load_dotenv
-
-        load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
-        bearer_token = os.getenv("TMDB_BEARER_TOKEN")
-        if not bearer_token:
-            raise ValueError("Falta TMDB_BEARER_TOKEN en el entorno de Airflow.")
-
-        headers = {
-            "accept": "application/json",
-            "Authorization": f"Bearer {bearer_token}",
-        }
-        tmdb_base = "https://api.themoviedb.org/3"
-        candidates = {}
-
-        from concurrent.futures import ThreadPoolExecutor
-
-        def get_providers(movie_id: int) -> list:
-            try:
-                r = requests.get(f"{tmdb_base}/movie/{movie_id}/watch/providers", headers=headers)
-                if r.status_code == 200:
-                    res = r.json().get("results", {}).get("AR", {})
-                    flatrate = res.get("flatrate", [])
-                    return [p["provider_name"] for p in flatrate if "provider_name" in p]
-            except Exception:
-                pass
-            return []
-
-        for endpoint in ["/movie/popular", "/movie/top_rated"]:
-            for page in range(1, n_pages + 1):
-                url = f"{tmdb_base}{endpoint}?language=es-AR&page={page}"
-                res = requests.get(url, headers=headers)
-                res.raise_for_status()
-                for m in res.json().get("results", []):
-                    if m.get("overview"):
-                        candidates[m["id"]] = {
-                            "id": m["id"],
-                            "title": m["title"],
-                            "overview": m["overview"],
-                            "vote_average": m.get("vote_average"),
-                            "poster_path": m.get("poster_path"),
-                            "providers": [],
-                        }
-
-        catalog_list = list(candidates.values())
-
-        def _fetch_prov(m):
-            m["providers"] = get_providers(m["id"])
-
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            list(executor.map(_fetch_prov, catalog_list))
-
         catalog_path = os.path.join(DATA_DIR, "catalog.json")
-        with open(catalog_path, "w", encoding="utf-8") as f:
-            json.dump(catalog_list, f, ensure_ascii=False, indent=2)
-
-        print(f"Descargadas {len(catalog_list)} películas del catálogo con plataformas a: {catalog_path}")
+        fetch_and_save_catalog(output_path=catalog_path, n_pages=n_pages, region="AR")
+        print(f"Catálogo descargado y guardado en: {catalog_path}")
         return catalog_path
 
     @task(task_id="generate_embeddings")
@@ -106,14 +50,11 @@ with DAG(
         Task 2 (ETL - Transform): Genera embeddings semánticos con SentenceTransformers
         para todas las sinopsis del catálogo y almacena la matriz de vectores (.npy).
         """
-        from sentence_transformers import SentenceTransformer
-
         with open(catalog_path, "r", encoding="utf-8") as f:
             catalog = json.load(f)
 
         overviews = [m["overview"] for m in catalog]
-        model = SentenceTransformer("all-MiniLM-L6-v2")
-        embeddings = model.encode(overviews, normalize_embeddings=True)
+        embeddings = embed_texts(overviews)
 
         embeddings_path = os.path.join(DATA_DIR, "catalog_embeddings.npy")
         np.save(embeddings_path, embeddings)
@@ -127,102 +68,48 @@ with DAG(
         Task 3 (ML Inference): Toma los gustos de las personas, calcula el vector de gusto
         combinado y ejecuta la similitud coseno contra la matriz de embeddings del catálogo.
         """
-        import requests
-        from dotenv import load_dotenv
-        from sklearn.metrics.pairwise import cosine_similarity
-        from sentence_transformers import SentenceTransformer
-
-        load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
-        bearer_token = os.getenv("TMDB_BEARER_TOKEN")
-        headers = {
-            "accept": "application/json",
-            "Authorization": f"Bearer {bearer_token}",
-        }
-        tmdb_base = "https://api.themoviedb.org/3"
-
         persona_1 = ["Interstellar", "Eternal Sunshine of the Spotless Mind", "Whiplash"]
         persona_2 = ["Coco", "La La Land", "Amelie"]
 
-        model = SentenceTransformer("all-MiniLM-L6-v2")
-
-        def search_overview(title: str):
-            url = f"{tmdb_base}/search/movie?query={title}&language=es-AR"
-            res = requests.get(url, headers=headers).json()
-            results = res.get("results", [])
-            if not results or not results[0].get("overview"):
-                return None, None
-            top = results[0]
-            emb = model.encode(top["overview"], normalize_embeddings=True)
-            return top, emb
-
-        def get_user_vector(titles: list[str]):
-            vecs, found = [], []
-            for t in titles:
-                m, v = search_overview(t)
-                if m is not None and v is not None:
-                    found.append(m)
-                    vecs.append(v)
-            user_v = np.mean(vecs, axis=0)
-            user_v /= np.linalg.norm(user_v)
-            return user_v, found
-
-        v1, found1 = get_user_vector(persona_1)
-        v2, found2 = get_user_vector(persona_2)
-
-        v_combined = (v1 + v2) / 2
-        v_combined /= np.linalg.norm(v_combined)
-
         with open(catalog_path, "r", encoding="utf-8") as f:
             catalog = json.load(f)
-        embeddings = np.load(embeddings_path)
 
-        seen_ids = {m["id"] for m in found1 + found2}
-        valid_indices = [i for i, m in enumerate(catalog) if m["id"] not in seen_ids]
-
-        filtered_catalog = [catalog[i] for i in valid_indices]
-        filtered_embeddings = embeddings[valid_indices]
-
-        sims = cosine_similarity(v_combined.reshape(1, -1), filtered_embeddings)[0]
-
-        for m, s in zip(filtered_catalog, sims):
-            m["score"] = float(s)
-
-        ranking = sorted(filtered_catalog, key=lambda x: x["score"], reverse=True)
-        top_10 = ranking[:10]
-
-        results_df = pd.DataFrame(top_10)
-        if "providers" in results_df.columns:
-            results_df["providers_str"] = results_df["providers"].apply(
-                lambda p: ", ".join(p) if isinstance(p, list) and p else "No disponible en streaming"
-            )
-        else:
-            results_df["providers_str"] = "No disponible en streaming"
-
-        results_df = results_df[["title", "score", "vote_average", "providers_str", "overview"]]
-        results_df.rename(columns={"providers_str": "providers"}, inplace=True)
-        results_df["score"] = results_df["score"].round(3)
+        df_results, extra_data = recommend(
+            people_movies=[persona_1, persona_2],
+            people_names=["Persona 1", "Persona 2"],
+            candidate_pool=catalog,
+            n_recommendations=10,
+            region="AR",
+        )
 
         results_csv_path = os.path.join(OUTPUT_DIR, "recommendations.csv")
-        results_df.to_csv(results_csv_path, index=False)
+        df_results.to_csv(results_csv_path, index=False)
 
-        print(f"Recomendacion #1: {top_10[0]['title']} (Score: {top_10[0]['score']:.3f})")
+        print(f"Recomendacion #1: {df_results.iloc[0]['title']} (Score: {df_results.iloc[0]['score']})")
         print(f"Resultados exportados a: {results_csv_path}")
         return results_csv_path
 
     @task(task_id="generate_pca_plot")
-    def generate_pca_plot(catalog_path: str, embeddings_path: str, recommendations_csv_path: str) -> str:
+    def generate_pca_plot(recommendations_csv_path: str) -> str:
         """
         Task 4 (Reporting): Genera la visualización 2D (PCA) del mapa de gustos y recomendaciones.
         """
-        df_recs = pd.read_csv(recommendations_csv_path)
-        top_titles = df_recs["title"].tolist()
+        persona_1 = ["Interstellar", "Eternal Sunshine of the Spotless Mind", "Whiplash"]
+        persona_2 = ["Coco", "La La Land", "Amelie"]
 
-        print(f"Generando reporte visual PCA para {len(top_titles)} películas recomendadas...")
+        _, extra_data = recommend(
+            people_movies=[persona_1, persona_2],
+            people_names=["Persona 1", "Persona 2"],
+            n_recommendations=10,
+            region="AR",
+        )
+
         plot_output_path = os.path.join(OUTPUT_DIR, "mapa_gustos_airflow.png")
+        plot_taste_map(extra_data, save_path=plot_output_path)
         print(f"Grafico PCA generado exitosamente en: {plot_output_path}")
         return plot_output_path
 
     cat_path = fetch_tmdb_catalog()
     emb_path = generate_embeddings(cat_path)
     recs_path = calculate_recommendations(cat_path, emb_path)
-    plot_path = generate_pca_plot(cat_path, emb_path, recs_path)
+    plot_path = generate_pca_plot(recs_path)
