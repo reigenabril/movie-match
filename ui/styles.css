@@ -1,0 +1,49 @@
+/* Estilos modernos y responsivos para Movie Match Streamlit UI */
+
+.main {
+    background-color: #0e1117;
+}
+
+.stButton>button {
+    width: 100%;
+    background: linear-gradient(90deg, #ff4b4b 0%, #ff6b6b 100%);
+    color: white;
+    font-weight: bold;
+    border-radius: 8px;
+    height: 3.2em;
+    font-size: 1.05rem;
+    border: none;
+    box-shadow: 0 4px 12px rgba(255, 75, 75, 0.3);
+    transition: all 0.3s ease;
+}
+
+.stButton>button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(255, 75, 75, 0.4);
+}
+
+.person-card {
+    background: #1e222d;
+    border-radius: 12px;
+    padding: 18px;
+    border: 1px solid #2d3342;
+    margin-bottom: 15px;
+}
+
+.score-badge {
+    background-color: #2e7d32;
+    color: white;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-weight: bold;
+    font-size: 0.95em;
+    display: inline-block;
+}
+
+.veto-card {
+    background: #2b1b1f;
+    border-radius: 12px;
+    padding: 18px;
+    border: 1px solid #5c2429;
+    margin-bottom: 20px;
+}

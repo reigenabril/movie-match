@@ -49,6 +49,12 @@ movie/
 │   ├── recommender.py     # Lógica matemática (vector de gusto ponderado, penalizaciones y similitud)
 │   ├── visualization.py   # Proyección 2D con PCA y generación de gráficos
 │   └── __main__.py        # Ejecución CLI modular (python -m movie_match)
+├── ui/                    # Componentes modulares y estilos de Streamlit
+│   ├── styles.css         # Hoja de estilos moderna y responsiva
+│   ├── theme.py           # Inyección de estilos y temas
+│   ├── sidebar.py         # Barra lateral de filtros y configuración
+│   ├── group_inputs.py    # Formularios de integrantes y veto
+│   └── results_view.py    # Tarjetas, tabla y gráficos de recomendaciones
 ├── app.py                 # Aplicación Web Interactiva con Streamlit
 ├── cli.py                 # Punto de entrada directo por terminal
 ├── dags/
