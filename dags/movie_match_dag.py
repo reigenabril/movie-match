@@ -1,6 +1,7 @@
 from __future__ import annotations
 import os
 import json
+import pickle
 import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
@@ -63,10 +64,10 @@ with DAG(
         return embeddings_path
 
     @task(task_id="calculate_recommendations")
-    def calculate_recommendations(catalog_path: str, embeddings_path: str) -> str:
+    def calculate_recommendations(catalog_path: str, embeddings_path: str) -> dict:
         """
         Task 3 (ML Inference): Toma los gustos de las personas, calcula el vector de gusto
-        combinado y ejecuta la similitud coseno contra la matriz de embeddings del catálogo.
+        combinado y ejecuta la similitud coseno contra la matriz de embeddings precomputada.
         """
         persona_1 = ["Interstellar", "Eternal Sunshine of the Spotless Mind", "Whiplash"]
         persona_2 = ["Coco", "La La Land", "Amelie"]
@@ -74,10 +75,13 @@ with DAG(
         with open(catalog_path, "r", encoding="utf-8") as f:
             catalog = json.load(f)
 
+        embeddings = np.load(embeddings_path)
+
         df_results, extra_data = recommend(
             people_movies=[persona_1, persona_2],
             people_names=["Persona 1", "Persona 2"],
             candidate_pool=catalog,
+            candidate_embeddings=embeddings,
             n_recommendations=10,
             region="AR",
         )
@@ -85,24 +89,24 @@ with DAG(
         results_csv_path = os.path.join(OUTPUT_DIR, "recommendations.csv")
         df_results.to_csv(results_csv_path, index=False)
 
+        context_path = os.path.join(OUTPUT_DIR, "recommendations_context.pkl")
+        with open(context_path, "wb") as f:
+            pickle.dump(extra_data, f)
+
         print(f"Recomendacion #1: {df_results.iloc[0]['title']} (Score: {df_results.iloc[0]['score']})")
         print(f"Resultados exportados a: {results_csv_path}")
-        return results_csv_path
+        print(f"Contexto de recomendación guardado en: {context_path}")
+        return {"csv_path": results_csv_path, "context_path": context_path}
 
     @task(task_id="generate_pca_plot")
-    def generate_pca_plot(recommendations_csv_path: str) -> str:
+    def generate_pca_plot(pipeline_output: dict) -> str:
         """
-        Task 4 (Reporting): Genera la visualización 2D (PCA) del mapa de gustos y recomendaciones.
+        Task 4 (Reporting): Genera la visualización 2D (PCA) del mapa de gustos y recomendaciones
+        a partir del contexto calculado en la inferencia previa.
         """
-        persona_1 = ["Interstellar", "Eternal Sunshine of the Spotless Mind", "Whiplash"]
-        persona_2 = ["Coco", "La La Land", "Amelie"]
-
-        _, extra_data = recommend(
-            people_movies=[persona_1, persona_2],
-            people_names=["Persona 1", "Persona 2"],
-            n_recommendations=10,
-            region="AR",
-        )
+        context_path = pipeline_output["context_path"]
+        with open(context_path, "rb") as f:
+            extra_data = pickle.load(f)
 
         plot_output_path = os.path.join(OUTPUT_DIR, "mapa_gustos_airflow.png")
         plot_taste_map(extra_data, save_path=plot_output_path)
@@ -111,5 +115,5 @@ with DAG(
 
     cat_path = fetch_tmdb_catalog()
     emb_path = generate_embeddings(cat_path)
-    recs_path = calculate_recommendations(cat_path, emb_path)
-    plot_path = generate_pca_plot(recs_path)
+    recs_output = calculate_recommendations(cat_path, emb_path)
+    plot_path = generate_pca_plot(recs_output)

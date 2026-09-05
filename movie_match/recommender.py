@@ -60,6 +60,7 @@ def recommend(
     disliked_genres: Optional[list[str]] = None,
     dislike_penalty_weight: float = 0.4,
     candidate_pool: Optional[list[dict]] = None,
+    candidate_embeddings: Optional[np.ndarray] = None,
 ) -> tuple[pd.DataFrame, dict]:
     """
     Calcula recomendaciones cruzando los gustos de N personas (con nombres y pesos personalizados)
@@ -115,6 +116,10 @@ def recommend(
 
     # Catálogo candidatas
     pool = candidate_pool if candidate_pool is not None else get_candidate_pool(n_pages=n_pages_pool, region=region)
+    if candidate_embeddings is not None and len(candidate_embeddings) == len(pool):
+        for idx, m in enumerate(pool):
+            m["_embedding"] = candidate_embeddings[idx]
+
     pool_filtered = [m for m in pool if m["id"] not in seen_ids and m["id"] not in disliked_ids]
 
     # Excluir películas vetadas por género si aplica
@@ -186,7 +191,13 @@ def recommend(
         )
 
     # Calcular embeddings y similitud coseno
-    pool_embeddings = np.array([embed_text(m["overview"]) for m in pool_filtered])
+    if pool_filtered and all("_embedding" in m for m in pool_filtered):
+        pool_embeddings = np.array([m["_embedding"] for m in pool_filtered])
+    else:
+        pool_embeddings = embed_texts([m["overview"] for m in pool_filtered])
+        for m, emb in zip(pool_filtered, pool_embeddings):
+            m["_embedding"] = emb
+
     pos_sims = cosine_similarity(combined_vector.reshape(1, -1), pool_embeddings)[0]
 
     if disliked_vectors:
@@ -216,7 +227,9 @@ def recommend(
                 })
 
     for m in top_recommendations:
-        m_vec = embed_text(m["overview"])
+        m_vec = m.get("_embedding")
+        if m_vec is None:
+            m_vec = embed_text(m["overview"])
         best_title = "N/A"
         best_person = ""
         best_sim = -1.0
